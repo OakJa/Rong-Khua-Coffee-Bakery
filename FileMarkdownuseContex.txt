@@ -1,0 +1,80 @@
+## useContext คืออะไร
+
+`useContext` เป็น Hook ที่ใช้ "อ่านค่า" จาก Context ที่สร้างไว้ด้วย `createContext` โดยไม่ต้องส่งค่าผ่าน props ลงมาทีละชั้น (Props Drilling) มันช่วยให้ component ไหนก็ตามที่อยู่ภายใต้ Provider สามารถดึงค่าที่แชร์กันไว้มาใช้ได้โดยตรง
+
+## หลักการทำงาน
+
+การใช้ useContext มี 3 ขั้นตอนเสมอ:
+
+1. **สร้าง Context** ด้วย `createContext()` — เป็นเหมือน "ท่อ" กลางที่ไว้ส่งข้อมูล
+2. **ห่อด้วย Provider** — component แม่ประกาศค่าที่จะแชร์ผ่าน `<Context.Provider value={...}>`
+3. **ดึงค่ามาใช้ด้วย useContext(Context)** — component ลูกหลานเรียกใช้ได้เลย ไม่ว่าจะอยู่ลึกแค่ไหน
+
+หลักการเบื้องหลังคือ React จะ "mark" ค่าที่ผูกกับ Context ไว้ เมื่อค่าใน Provider เปลี่ยน ทุก component ที่ `useContext` ค่านั้นอยู่จะ re-render ใหม่โดยอัตโนมัติ — คล้ายกับการ "subscribe" เข้ากับค่ากลาง ไม่ต้องรอให้ parent ส่ง props ใหม่ลงมา
+
+## ตัวอย่างโค้ดในโปรแกรมนี้
+
+**ขั้นที่ 1-2: สร้าง Context + Provider** (`src/context/ThemeContext.jsx`)
+```jsx
+const ThemeContext = createContext(null)
+
+export function ThemeProvider({ children }) {
+  const [theme, setTheme] = useLocalStorage('coffee-shop:theme', 'day')
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === 'day' ? 'night' : 'day'))
+  }, [setTheme])
+
+  return (
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  )
+}
+
+export function useTheme() {
+  const ctx = useContext(ThemeContext)   // <-- ดึงค่ามาใช้
+  if (!ctx) throw new Error('useTheme ต้องถูกเรียกใช้ภายใน <ThemeProvider>')
+  return ctx
+}
+```
+
+**ห่อทั้งแอปไว้** (`src/main.jsx`)
+```jsx
+<ThemeProvider>
+  <App />
+</ThemeProvider>
+```
+
+**ขั้นที่ 3: ใช้งานจริงใน component ลูก** (`src/components/ThemeToggle.jsx`)
+```jsx
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme()   // ดึง theme ตรงนี้ได้เลย
+  return (
+    <button onClick={toggleTheme}>
+      {theme === 'night' ? '🌙 NIGHT BREW' : '☀️ DAY SHIFT'}
+    </button>
+  )
+}
+```
+
+สังเกตว่า `ThemeToggle` อยู่ลึกไปหลายชั้น (`main.jsx` → `App.jsx` → `Header.jsx` → `ThemeToggle.jsx`) แต่ไม่ต้องรับ props `theme`/`toggleTheme` จาก `Header` เลยแม้แต่น้อย — `Header.jsx` ไม่รู้ด้วยซ้ำว่ามีธีมอยู่ในแอป
+
+เหตุผลที่เลือกใช้ในโปรแกรมนี้
+
+ธีม (Day Shift / Night Brew) เป็นข้อมูลระดับ "global" ที่หลาย component ต้องรู้พร้อมกัน — ปุ่มสลับธีมอยู่ที่ `Header`, แต่สีพื้นหลัง/สีตัวอักษรกระทบทั้งหน้า (ผ่าน CSS variable บน `<html data-theme>`) ถ้าใช้ props ธรรมดา จะต้องส่ง `theme` และ `toggleTheme` ผ่าน `App → Header → ThemeToggle` ทั้งที่ `Header` ไม่ได้ใช้ค่านี้เลย นี่คือสถานการณ์คลาสสิกที่ useContext เหมาะที่สุด
+
+ข้อดี
+
+- ตัดปัญหา Props Drilling — component กลางทางไม่ต้องรับ-ส่ง props ที่ตัวเองไม่ใช้
+- แก้ไข/เพิ่ม component ใหม่ที่ต้องใช้ธีมได้ทันที แค่เรียก `useTheme()` ไม่ต้องแก้ไฟล์อื่น
+- แยก logic ธีมออกจาก component UI ชัดเจน (อยู่ใน `ThemeContext.jsx` ที่เดียว)
+- รวมกับ custom hook (`useTheme`) ทำให้เรียกใช้งานง่าย อ่านโค้ดรู้เรื่องทันที
+
+ ข้อจำกัด
+
+- **Re-render กว้าง** — เมื่อค่าใน Context เปลี่ยน ทุก component ที่ `useContext` context นั้นจะ re-render หมด แม้จะใช้แค่บางส่วนของค่า (ในโปรเจกต์นี้ผลกระทบน้อยเพราะ context เล็ก แต่ถ้า Context มีข้อมูลเยอะและเปลี่ยนบ่อย อาจกระทบ performance)
+- **ไม่เหมาะกับ state ที่เปลี่ยนถี่มาก** เช่น ค่าจาก mouse move หรือ animation เพราะจะทำให้ทุก consumer re-render รัวๆ
+- **Debug ยากขึ้นเล็กน้อย** — ค่าที่มาจาก context ไม่เห็น "เส้นทาง" ชัดเจนเหมือน props ต้องไล่หาว่า Provider อยู่ตรงไหน
+- **ไม่ใช่ตัวจัดการ state ที่สมบูรณ์แบบ** — ไม่มีกลไก async, middleware หรือ dev tools แบบ state management library อื่นๆ (เช่น Redux, Zustand) ถ้าโปรเจกต์ใหญ่ขึ้นมากอาจต้องพิจารณาเครื่องมือเหล่านั้นแทน
+- ต้องระวังลืมห่อ `<ThemeProvider>` ตอน mount component ที่เรียก `useTheme()` ไม่งั้นจะได้ context เป็น `null` (ในโค้ดนี้ป้องกันด้วยการ throw error ให้รู้ทันที)
